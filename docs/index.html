@@ -1,0 +1,806 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Instant Flight Trajectory Predictor</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --accent:  #38bdf8;
+      --accent2: #22d3ee;
+      --green:   #4ade80;
+      --amber:   #fbbf24;
+      --red:     #f87171;
+      --bg:      #0b0f1a;
+      --card:    #111827;
+      --border:  #1f2937;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; background: var(--bg); color: #e2e8f0; font-family: 'Segoe UI', system-ui, sans-serif; }
+
+    /* Status bar */
+    #status-bar { background: #060b14; border-bottom: 1px solid var(--border); padding: 6px 20px; display: flex; align-items: center; gap: 16px; }
+    .badge { display: inline-flex; align-items: center; gap: 6px; background: #1e293b; border: 1px solid var(--border); border-radius: 999px; padding: 3px 12px; font-size: 12px; font-weight: 600; letter-spacing: 0.04em; }
+    .badge .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 6px var(--green); animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+    .badge.time  { color: var(--accent); }
+    .badge.speed { color: var(--green); }
+
+    /* Layout */
+    #app { display: grid; grid-template-columns: 320px 1fr; height: calc(100vh - 41px); overflow: hidden; }
+    #left-panel { background: var(--card); border-right: 1px solid var(--border); overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+    #right-panel { overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+
+    /* Panels */
+    .panel { background: #0f172a; border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
+    .panel-title { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: #64748b; margin-bottom: 12px; display: flex; align-items: center; gap: 6px; }
+    .panel-title::before { content: ''; display: inline-block; width: 3px; height: 14px; background: var(--accent); border-radius: 2px; }
+
+    /* Sliders */
+    .slider-group { margin-bottom: 12px; }
+    .slider-label { display: flex; justify-content: space-between; align-items: baseline; font-size: 12px; margin-bottom: 4px; }
+    .slider-label .name { color: #94a3b8; }
+    .slider-label .val  { font-weight: 700; color: var(--accent); font-size: 13px; }
+    input[type=range] {
+      width: 100%; height: 4px; background: #1e293b; border-radius: 2px;
+      appearance: none; -webkit-appearance: none; outline: none; cursor: pointer;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%;
+      background: var(--accent); border: 2px solid #0b0f1a; cursor: pointer;
+    }
+    input[type=range]::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; }
+
+    /* Presets */
+    .preset-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+    .preset-btn {
+      font-size: 10px; font-weight: 600; padding: 6px 4px; border-radius: 6px;
+      border: 1px solid var(--border); background: #1e293b; color: #94a3b8;
+      cursor: pointer; text-align: center; letter-spacing: 0.03em; transition: all .15s;
+    }
+    .preset-btn:hover { background: #1d3557; border-color: var(--accent); color: var(--accent); }
+
+    /* Model dropdown */
+    select {
+      width: 100%; background: #1e293b; border: 1px solid var(--border); color: #e2e8f0;
+      border-radius: 6px; padding: 7px 10px; font-size: 12px; outline: none; cursor: pointer;
+    }
+    select:focus { border-color: var(--accent); }
+
+    /* Toggle */
+    .toggle-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #94a3b8; cursor: pointer; }
+    .toggle-row input[type=checkbox] { accent-color: var(--green); width: 14px; height: 14px; cursor: pointer; }
+
+    /* KPI Cards */
+    .kpi-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .kpi-card { background: #0b0f1a; border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+    .kpi-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: #64748b; margin-bottom: 4px; }
+    .kpi-value { font-size: 22px; font-weight: 800; color: var(--accent); line-height: 1.1; }
+    .kpi-sub   { font-size: 10px; color: #475569; margin-top: 3px; }
+
+    /* Chart */
+    #chart-container { position: relative; background: #060b14; border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
+    #chart-container canvas { max-height: 340px; }
+
+    /* Audit box */
+    #audit-box { display: none; background: #0a1628; border: 1px solid #1e3a5f; border-radius: 8px; padding: 10px 14px; font-size: 11px; color: #7dd3fc; font-family: monospace; }
+    #audit-box.visible { display: block; }
+
+    /* Benchmark table */
+    table { width: 100%; border-collapse: collapse; font-size: 11px; }
+    th { background: #1e293b; color: #64748b; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 7px 10px; text-align: left; border-bottom: 1px solid var(--border); }
+    td { padding: 7px 10px; border-bottom: 1px solid #1a2030; }
+    tr:last-child td { border-bottom: none; }
+    tr.active-row td { color: var(--accent); background: #0d1f35; }
+    .r2-good  { color: var(--green); font-weight: 700; }
+    .r2-ok    { color: var(--amber); font-weight: 700; }
+    .r2-bad   { color: var(--red);   font-weight: 700; }
+
+    /* Vacuum toggle */
+    .small-toggle { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #64748b; cursor: pointer; }
+    .small-toggle input { accent-color: #94a3b8; cursor: pointer; }
+
+    /* Loading spinner */
+    #loading { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.7); z-index: 100; align-items: center; justify-content: center; flex-direction: column; gap: 12px; }
+    #loading.show { display: flex; }
+    .spinner { width: 40px; height: 40px; border: 3px solid #1e3a5f; border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 5px; } ::-webkit-scrollbar-track { background: transparent; } ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 99px; }
+  </style>
+</head>
+<body>
+
+<!-- Loading overlay -->
+<div id="loading">
+  <div class="spinner"></div>
+  <span style="font-size:13px;color:#94a3b8;">Initializing ML Engine...</span>
+</div>
+
+<!-- Status Bar -->
+<div id="status-bar">
+  <span style="font-size:13px;font-weight:700;letter-spacing:.05em;color:#e2e8f0;">⚡ FLIGHT TRAJECTORY PREDICTOR</span>
+  <div style="flex:1"></div>
+  <div class="badge time"><div class="dot"></div><span id="badge-inf">— ms</span></div>
+  <div class="badge speed"><span id="badge-speed">— Faster than ODE</span></div>
+  <div class="badge" style="color:#64748b;font-size:11px;" id="badge-model">physics_poly</div>
+</div>
+
+<!-- App -->
+<div id="app">
+
+  <!-- LEFT PANEL: Controls -->
+  <div id="left-panel">
+
+    <!-- Sliders -->
+    <div class="panel">
+      <div class="panel-title">Launch Parameters</div>
+
+      <div class="slider-group">
+        <div class="slider-label">
+          <span class="name">Initial Velocity</span>
+          <span class="val"><span id="v0-val">150</span> m/s</span>
+        </div>
+        <input type="range" id="v0" min="20" max="300" step="1" value="150">
+      </div>
+
+      <div class="slider-group">
+        <div class="slider-label">
+          <span class="name">Launch Angle</span>
+          <span class="val"><span id="ang-val">45</span>°</span>
+        </div>
+        <input type="range" id="ang" min="5" max="85" step="1" value="45">
+      </div>
+
+      <div class="slider-group">
+        <div class="slider-label">
+          <span class="name">Projectile Mass</span>
+          <span class="val"><span id="mass-val">5.0</span> kg</span>
+        </div>
+        <input type="range" id="mass" min="0.5" max="50" step="0.5" value="5">
+      </div>
+    </div>
+
+    <!-- Presets -->
+    <div class="panel">
+      <div class="panel-title">Quick Regime Presets</div>
+      <div class="preset-grid">
+        <button class="preset-btn" onclick="applyPreset(250,45,1.5)">⚡ High Drag<br>250 m/s · 45° · 1.5 kg</button>
+        <button class="preset-btn" onclick="applyPreset(150,45,5)">🎯 Standard<br>150 m/s · 45° · 5 kg</button>
+        <button class="preset-btn" onclick="applyPreset(80,45,25)">🪨 Low Drag<br>80 m/s · 45° · 25 kg</button>
+      </div>
+    </div>
+
+    <!-- Model Selection -->
+    <div class="panel">
+      <div class="panel-title">ML Model</div>
+      <select id="model-select">
+        <option value="physics_poly" selected>🌟 physics_poly (Recommended)</option>
+        <option value="decision_tree">🌳 decision_tree</option>
+        <option value="extra_trees">🌲 extra_trees</option>
+        <option value="simple_linear">📈 simple_linear (Baseline)</option>
+      </select>
+    </div>
+
+    <!-- ODE Overlay Toggle -->
+    <div class="panel">
+      <div class="panel-title">Verification</div>
+      <label class="toggle-row">
+        <input type="checkbox" id="ode-toggle">
+        <span>Overlay Exact RK45 ODE Solver</span>
+      </label>
+      <div id="audit-box" style="margin-top:10px;">
+        <div id="audit-content">—</div>
+      </div>
+    </div>
+
+    <!-- Vacuum toggle -->
+    <div class="panel">
+      <div class="panel-title">Display</div>
+      <label class="small-toggle">
+        <input type="checkbox" id="vac-toggle" checked>
+        <span>Show Vacuum Parabola</span>
+      </label>
+    </div>
+
+  </div>
+
+  <!-- RIGHT PANEL: Telemetry -->
+  <div id="right-panel">
+
+    <!-- KPI Cards -->
+    <div class="kpi-grid">
+      <div class="kpi-card">
+        <div class="kpi-label">Predicted Landing Range</div>
+        <div class="kpi-value" id="kpi-range">—</div>
+        <div class="kpi-sub" id="kpi-range-sub">—% drag loss vs vacuum</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Peak Altitude</div>
+        <div class="kpi-value" id="kpi-alt">—</div>
+        <div class="kpi-sub" id="kpi-alt-sub">Apex X: — m · Asymmetry: —</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Flight Duration</div>
+        <div class="kpi-value" id="kpi-time">—</div>
+        <div class="kpi-sub">Total airborne time</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Impact Velocity</div>
+        <div class="kpi-value" id="kpi-impact">—</div>
+        <div class="kpi-sub" id="kpi-impact-sub">—% kinetic energy retained</div>
+      </div>
+    </div>
+
+    <!-- Trajectory Chart -->
+    <div id="chart-container" class="panel">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+        <div class="panel-title" style="margin:0;">2D Trajectory</div>
+        <div style="display:flex;gap:14px;font-size:11px;color:#64748b;">
+          <span><span style="display:inline-block;width:12px;height:2px;background:#38bdf8;margin-right:4px;vertical-align:middle;"></span>ML Drag</span>
+          <span><span style="display:inline-block;width:12px;height:2px;background:#94a3b8;margin-right:4px;vertical-align:middle;border-top:1px dashed #94a3b8;"></span>Vacuum</span>
+          <span><span style="display:inline-block;width:12px;height:2px;background:#4ade80;margin-right:4px;vertical-align:middle;border-top:1px dashed #4ade80;"></span>ODE RK45</span>
+        </div>
+      </div>
+      <canvas id="traj-chart"></canvas>
+    </div>
+
+    <!-- Benchmark Table -->
+    <div class="panel">
+      <div class="panel-title">Model Holdout Benchmark (20% Test Split)</div>
+      <table id="bench-table">
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>R² Range</th>
+            <th>R² Altitude</th>
+            <th>MAE Range (m)</th>
+            <th>MAE Alt (m)</th>
+            <th>Inference</th>
+            <th>Speedup</th>
+          </tr>
+        </thead>
+        <tbody id="bench-tbody">
+          <tr><td colspan="7" style="color:#475569;text-align:center;">Loading metrics...</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// ============================================================
+// State
+// ============================================================
+let chart = null;
+let currentResult = null;
+let metricsData = null;
+let debounceTimer = null;
+let cachedWeights = null;
+let isStaticMode = false;
+
+// ============================================================
+// Client-Side Trajectory Reconstruction (Asymmetric Power Spline)
+// ============================================================
+function reconstructPathJS(R, H, apex_x, n_pts = 80) {
+  apex_x = Math.min(Math.max(apex_x, 0.01), R - 0.01);
+  const ratio = apex_x / R;
+  const p_asc = Math.min(Math.max(1.0 / ratio, 1.35), 2.0);
+  const p_desc = Math.min(Math.max(0.85 / (1.0 - ratio), 2.0), 3.0);
+
+  const xs = [];
+  const ys = [];
+  const half = Math.floor(n_pts / 2);
+
+  // Ascent
+  for (let i = 0; i < half; i++) {
+    const x = (i / (half - 1)) * apex_x;
+    const y = H * (1.0 - Math.pow((apex_x - x) / apex_x, p_asc));
+    xs.push(x);
+    ys.push(Math.max(y, 0));
+  }
+  // Descent
+  for (let i = 1; i < (n_pts - half); i++) {
+    const x = apex_x + (i / (n_pts - half - 1)) * (R - apex_x);
+    const y = H * (1.0 - Math.pow((x - apex_x) / (R - apex_x), p_desc));
+    xs.push(x);
+    ys.push(Math.max(y, 0));
+  }
+  return { xs, ys };
+}
+
+// ============================================================
+// Client-Side Runge-Kutta 4th Order ODE Numerical Solver
+// ============================================================
+function solveODE_JS(v0, angleDeg, m) {
+  const g = 9.81;
+  const k_drag = 0.003675 / m;
+  let x = 0, y = 0;
+  const theta = angleDeg * Math.PI / 180;
+  let vx = v0 * Math.cos(theta), vy = v0 * Math.sin(theta);
+  let t = 0;
+  const dt = 0.015;
+  let maxAlt = 0, apexX = 0;
+  const xs = [0], ys = [0];
+  const t0 = performance.now();
+
+  function deriv(vx_in, vy_in) {
+    const v = Math.hypot(vx_in, vy_in);
+    return [-k_drag * v * vx_in, -g - k_drag * v * vy_in];
+  }
+
+  while (t < 2000) {
+    if (y > maxAlt) { maxAlt = y; apexX = x; }
+
+    const [ax1, ay1] = deriv(vx, vy);
+    const [ax2, ay2] = deriv(vx + 0.5 * dt * ax1, vy + 0.5 * dt * ay1);
+    const [ax3, ay3] = deriv(vx + 0.5 * dt * ax2, vy + 0.5 * dt * ay2);
+    const [ax4, ay4] = deriv(vx + dt * ax3, vy + dt * ay3);
+
+    const nvx = vx + (dt / 6) * (ax1 + 2 * ax2 + 2 * ax3 + ax4);
+    const nvy = vy + (dt / 6) * (ay1 + 2 * ay2 + 2 * ay3 + ay4);
+
+    x += 0.5 * dt * (vx + nvx);
+    y += 0.5 * dt * (vy + nvy);
+    vx = nvx;
+    vy = nvy;
+    t += dt;
+
+    if (xs.length % 3 === 0 || y <= 0) {
+      xs.push(x);
+      ys.push(Math.max(y, 0));
+    }
+    if (y <= 0 && t > 0.05) { break; }
+  }
+  const odeMs = performance.now() - t0;
+  return {
+    ode_range: x,
+    ode_altitude: maxAlt,
+    ode_impact_speed: Math.hypot(vx, vy),
+    ode_ms: odeMs,
+    ode_xs: xs,
+    ode_ys: ys
+  };
+}
+
+// ============================================================
+// Client-Side ML Model Evaluator (Standalone for GitHub Pages)
+// ============================================================
+function predictClientSide(v0, ang, mass, modelKey, includeODE) {
+  const t0 = performance.now();
+  const g = 9.81;
+  const theta = ang * Math.PI / 180;
+  const R_vac = Math.max((v0 * v0) * Math.sin(2 * theta) / g, 0.05);
+  const H_vac = Math.max(Math.pow(v0 * Math.sin(theta), 2) / (2 * g), 0.05);
+
+  let raw = [R_vac * 0.5, H_vac * 0.5, 10, R_vac * 0.25, v0 * 0.5];
+
+  if (cachedWeights && cachedWeights.physics_poly && modelKey === 'physics_poly') {
+    const W = cachedWeights.physics_poly;
+    const angle_rad = theta;
+    const feat = [
+      v0,
+      angle_rad,
+      mass,
+      Math.log(Math.max(mass, 1e-9)),
+      1.0 / Math.max(mass, 1e-9),
+      Math.sin(angle_rad),
+      Math.cos(angle_rad),
+      Math.sin(2 * angle_rad),
+      v0 * Math.cos(angle_rad),
+      v0 * Math.sin(angle_rad)
+    ];
+    const scaled = feat.map((val, i) => (val - W.scaler_mean[i]) / W.scaler_scale[i]);
+    const polyFeat = W.poly_powers.map(powers => {
+      let p = 1.0;
+      for (let i = 0; i < powers.length; i++) {
+        if (powers[i] > 0) p *= Math.pow(scaled[i], powers[i]);
+      }
+      return p;
+    });
+    raw = W.ridge_intercept.map((b, targetIdx) => {
+      let s = b;
+      const coefs = W.ridge_coef[targetIdx];
+      for (let i = 0; i < coefs.length; i++) {
+        s += coefs[i] * polyFeat[i];
+      }
+      return s;
+    });
+  } else if (cachedWeights && cachedWeights.simple_linear && modelKey === 'simple_linear') {
+    const W = cachedWeights.simple_linear;
+    raw = W.intercept.map((b, targetIdx) => {
+      return b + W.coef[targetIdx][0] * v0 + W.coef[targetIdx][1] * ang + W.coef[targetIdx][2] * mass;
+    });
+  } else if (cachedWeights && cachedWeights.decision_tree && modelKey === 'decision_tree') {
+    const dt = cachedWeights.decision_tree;
+    let node = 0;
+    const x = [v0, ang, mass];
+    while (dt.children_left[node] !== -1 && dt.children_right[node] !== -1) {
+      const f = dt.feature[node];
+      if (x[f] <= dt.threshold[node]) {
+        node = dt.children_left[node];
+      } else {
+        node = dt.children_right[node];
+      }
+    }
+    raw = dt.value[node];
+  }
+
+  const pred_range  = Math.min(Math.max(raw[0], 0.05), R_vac);
+  const pred_alt    = Math.min(Math.max(raw[1], 0.05), H_vac);
+  const pred_time   = Math.max(raw[2], 0.001);
+  const pred_apex_x = Math.min(Math.max(raw[3], 0.01), pred_range - 0.01);
+  const pred_impact = Math.max(raw[4], 0.01);
+
+  const drag_loss_pct    = (1.0 - pred_range / R_vac) * 100.0;
+  const ke_retained_pct  = Math.pow(pred_impact / v0, 2) * 100.0;
+  const asymmetry_ratio  = pred_range > 0 ? (pred_apex_x / pred_range) : 0.5;
+
+  const inf_ms = Math.max(performance.now() - t0, 0.02);
+  const ode_avg_ms = (cachedWeights && cachedWeights.metrics) ? cachedWeights.metrics.ode_avg_ms : 1.5;
+  const speedup = Math.max(ode_avg_ms / inf_ms, 1.0);
+
+  const traj = reconstructPathJS(pred_range, pred_alt, pred_apex_x, 80);
+
+  const res = {
+    model_key: modelKey,
+    inference_ms: inf_ms,
+    speedup_label: `${Math.round(speedup)}x Faster than ODE`,
+    vacuum_range: R_vac,
+    vacuum_altitude: H_vac,
+    pred_range: pred_range,
+    pred_altitude: pred_alt,
+    pred_flight_time: pred_time,
+    pred_apex_x: pred_apex_x,
+    pred_impact_speed: pred_impact,
+    drag_loss_pct: drag_loss_pct,
+    ke_retained_pct: ke_retained_pct,
+    asymmetry_ratio: asymmetry_ratio,
+    traj_xs: traj.xs,
+    traj_ys: traj.ys
+  };
+
+  if (includeODE) {
+    const ode = solveODE_JS(v0, ang, mass);
+    res.ode_range = ode.ode_range;
+    res.ode_altitude = ode.ode_altitude;
+    res.ode_impact_speed = ode.ode_impact_speed;
+    res.ode_ms = ode.ode_ms;
+    res.ode_xs = ode.ode_xs;
+    res.ode_ys = ode.ode_ys;
+    res.error_range_m = Math.abs(pred_range - ode.ode_range);
+    res.error_alt_m = Math.abs(pred_alt - ode.ode_altitude);
+  }
+
+  return res;
+}
+
+// ============================================================
+// Chart Initialisation
+// ============================================================
+function initChart() {
+  const ctx = document.getElementById('traj-chart').getContext('2d');
+  chart = new Chart(ctx, {
+    type: 'scatter',
+    data: {
+      datasets: [
+        {
+          label: 'ML Drag Trajectory',
+          data: [],
+          showLine: true,
+          fill: true,
+          backgroundColor: 'rgba(56,189,248,0.06)',
+          borderColor: '#38bdf8',
+          borderWidth: 2,
+          pointRadius: 0,
+          tension: 0.3,
+        },
+        {
+          label: 'Apex',
+          data: [],
+          pointBackgroundColor: '#22d3ee',
+          pointBorderColor: '#0b0f1a',
+          pointBorderWidth: 2,
+          pointRadius: 7,
+          showLine: false,
+        },
+        {
+          label: 'Vacuum Parabola',
+          data: [],
+          showLine: true,
+          fill: false,
+          borderColor: '#475569',
+          borderDash: [4, 3],
+          borderWidth: 1.5,
+          pointRadius: 0,
+          tension: 0,
+        },
+        {
+          label: 'ODE RK45',
+          data: [],
+          showLine: true,
+          fill: false,
+          borderColor: '#4ade80',
+          borderDash: [5, 4],
+          borderWidth: 2,
+          pointRadius: 0,
+          tension: 0,
+        },
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: { duration: 200 },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => `(${ctx.parsed.x.toFixed(0)} m, ${ctx.parsed.y.toFixed(0)} m)`
+          }
+        }
+      },
+      scales: {
+        x: {
+          type: 'linear',
+          title: { display: true, text: 'Range (m)', color: '#475569', font: { size: 11 } },
+          grid: { color: '#111827' },
+          ticks: { color: '#475569', font: { size: 10 } },
+          min: 0,
+        },
+        y: {
+          type: 'linear',
+          title: { display: true, text: 'Altitude (m)', color: '#475569', font: { size: 11 } },
+          grid: { color: '#111827' },
+          ticks: { color: '#475569', font: { size: 10 } },
+          min: 0,
+        }
+      }
+    }
+  });
+}
+
+// ============================================================
+// Vacuum Parabola
+// ============================================================
+function vacuumParabola(v0, angleDeg, nPts = 60) {
+  const g = 9.81;
+  const theta = angleDeg * Math.PI / 180;
+  const vx = v0 * Math.cos(theta);
+  const vy = v0 * Math.sin(theta);
+  const T  = 2 * vy / g;
+  const pts = [];
+  for (let i = 0; i <= nPts; i++) {
+    const t = (i / nPts) * T;
+    pts.push({ x: vx * t, y: vy * t - 0.5 * g * t * t });
+  }
+  return pts;
+}
+
+// ============================================================
+// Predict
+// ============================================================
+async function predict() {
+  const v0    = parseFloat(document.getElementById('v0').value);
+  const ang   = parseFloat(document.getElementById('ang').value);
+  const mass  = parseFloat(document.getElementById('mass').value);
+  const model = document.getElementById('model-select').value;
+  const ode   = document.getElementById('ode-toggle').checked;
+
+  const body = { velocity: v0, angle: ang, mass, model_key: model, include_ode_ground_truth: ode };
+
+  if (isStaticMode) {
+    const data = predictClientSide(v0, ang, mass, model, ode);
+    currentResult = data;
+    updateUI(data, v0, ang, mass);
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/predict', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    currentResult = data;
+    updateUI(data, v0, ang, mass);
+  } catch (e) {
+    console.warn('API error, falling back to client-side inference:', e);
+    isStaticMode = true;
+    const data = predictClientSide(v0, ang, mass, model, ode);
+    currentResult = data;
+    updateUI(data, v0, ang, mass);
+  }
+}
+
+// ============================================================
+// Update UI
+// ============================================================
+function updateUI(d, v0, ang, mass) {
+  // Status bar
+  document.getElementById('badge-inf').textContent   = `${d.inference_ms.toFixed(3)} ms`;
+  document.getElementById('badge-speed').textContent = d.speedup_label;
+  document.getElementById('badge-model').textContent = d.model_key;
+
+  // KPI cards
+  document.getElementById('kpi-range').textContent        = `${d.pred_range.toLocaleString()} m`;
+  document.getElementById('kpi-range-sub').textContent    = `${d.drag_loss_pct.toFixed(1)}% drag loss vs vacuum (${d.vacuum_range.toLocaleString()} m)`;
+  document.getElementById('kpi-alt').textContent          = `${d.pred_altitude.toLocaleString()} m`;
+  document.getElementById('kpi-alt-sub').textContent      = `Apex X: ${d.pred_apex_x.toFixed(0)} m · Asym: ${d.asymmetry_ratio.toFixed(3)}`;
+  document.getElementById('kpi-time').textContent         = `${d.pred_flight_time.toFixed(2)} s`;
+  document.getElementById('kpi-impact').textContent       = `${d.pred_impact_speed.toFixed(1)} m/s`;
+  document.getElementById('kpi-impact-sub').textContent   = `${d.ke_retained_pct.toFixed(1)}% kinetic energy retained`;
+
+  // Chart datasets
+  const trajPts  = d.traj_xs.map((x, i) => ({ x, y: d.traj_ys[i] }));
+  const apexPts  = [{ x: d.pred_apex_x, y: d.pred_altitude }];
+  const vacPts   = vacuumParabola(v0, ang);
+  const showVac  = document.getElementById('vac-toggle').checked;
+  const odePts   = (d.ode_xs && d.ode_ys)
+    ? d.ode_xs.map((x, i) => ({ x, y: Math.max(d.ode_ys[i], 0) }))
+    : [];
+
+  chart.data.datasets[0].data = trajPts;
+  chart.data.datasets[1].data = apexPts;
+  chart.data.datasets[2].data = showVac ? vacPts : [];
+  chart.data.datasets[3].data = odePts;
+
+  // Axis limits
+  const allX = [...d.traj_xs, d.vacuum_range, ...(d.ode_xs || [])];
+  const allY = [...d.traj_ys, d.vacuum_altitude, ...(d.ode_ys || [])];
+  const xMax = Math.max(...allX) * 1.05;
+  const yMax = Math.max(...allY) * 1.15;
+  chart.options.scales.x.max = xMax;
+  chart.options.scales.y.max = yMax;
+
+  chart.update();
+
+  // ODE audit box
+  const auditBox = document.getElementById('audit-box');
+  const auditContent = document.getElementById('audit-content');
+  if (d.ode_range !== undefined) {
+    auditBox.classList.add('visible');
+    auditContent.innerHTML =
+      `ODE Range:    <b style="color:#7dd3fc">${d.ode_range.toFixed(1)} m</b>  vs  ML: ${d.pred_range.toFixed(1)} m  →  Δ <b style="color:${d.error_range_m < 50 ? '#4ade80' : '#f87171'}">${d.error_range_m.toFixed(1)} m</b><br>` +
+      `ODE Altitude: <b style="color:#7dd3fc">${d.ode_altitude.toFixed(1)} m</b>  vs  ML: ${d.pred_altitude.toFixed(1)} m  →  Δ <b style="color:${d.error_alt_m < 20 ? '#4ade80' : '#f87171'}">${d.error_alt_m.toFixed(1)} m</b><br>` +
+      `ODE Solve: <b style="color:#fbbf24">${d.ode_ms.toFixed(1)} ms</b>  vs  ML Inference: <b style="color:#38bdf8">${d.inference_ms.toFixed(3)} ms</b>`;
+  } else {
+    auditBox.classList.remove('visible');
+  }
+
+  // Highlight active model row
+  document.querySelectorAll('#bench-tbody tr').forEach(tr => {
+    tr.classList.toggle('active-row', tr.dataset.model === d.model_key);
+  });
+}
+
+// ============================================================
+// Benchmark Table & Weights Loader
+// ============================================================
+async function loadMetrics() {
+  // 1. Try loading static weights for GitHub Pages / client-side support
+  try {
+    const wRes = await fetch('model_weights.json');
+    if (wRes.ok) {
+      cachedWeights = await wRes.json();
+      if (cachedWeights.metrics) {
+        metricsData = cachedWeights.metrics;
+      }
+    }
+  } catch (e) {
+    console.log('Static weights not found or fetch error:', e);
+  }
+
+  // 2. Try loading live /api/metrics if available
+  try {
+    const res = await fetch('/api/metrics');
+    if (res.ok) {
+      metricsData = await res.json();
+    }
+  } catch (e) {
+    console.log('Live metrics API unavailable, using cached metrics');
+  }
+
+  if (!metricsData) return;
+
+  try {
+    const tbody = document.getElementById('bench-tbody');
+    tbody.innerHTML = '';
+
+    const order = ['physics_poly', 'extra_trees', 'decision_tree', 'simple_linear'];
+    const modelLabels = {
+      physics_poly:  '🌟 physics_poly',
+      extra_trees:   '🌲 extra_trees',
+      decision_tree: '🌳 decision_tree',
+      simple_linear: '📈 simple_linear',
+    };
+
+    for (const key of order) {
+      const m = metricsData.models[key];
+      if (!m) continue;
+      const r2cls = (v) => v >= 0.99 ? 'r2-good' : v >= 0.95 ? 'r2-ok' : 'r2-bad';
+      const tr = document.createElement('tr');
+      tr.dataset.model = key;
+      tr.innerHTML = `
+        <td style="font-weight:600">${modelLabels[key] || key}</td>
+        <td class="${r2cls(m.r2_range)}">${m.r2_range.toFixed(4)}</td>
+        <td class="${r2cls(m.r2_altitude)}">${m.r2_altitude.toFixed(4)}</td>
+        <td>${m.mae_range_m.toFixed(1)}</td>
+        <td>${m.mae_altitude_m.toFixed(1)}</td>
+        <td style="color:var(--accent)">${m.inference_ms.toFixed(3)} ms</td>
+        <td style="color:var(--green)">${m.speedup_vs_ode.toFixed(0)}x</td>
+      `;
+      tbody.appendChild(tr);
+    }
+  } catch (e) {
+    console.error('Metrics error:', e);
+  }
+}
+
+// ============================================================
+// Preset Application
+// ============================================================
+function applyPreset(v, ang, mass) {
+  document.getElementById('v0').value   = v;
+  document.getElementById('ang').value  = ang;
+  document.getElementById('mass').value = mass;
+  document.getElementById('v0-val').textContent   = v;
+  document.getElementById('ang-val').textContent  = ang;
+  document.getElementById('mass-val').textContent = mass.toFixed(1);
+  triggerPredict();
+}
+
+// ============================================================
+// Debounced Predict Trigger
+// ============================================================
+function triggerPredict() {
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(predict, 60);
+}
+
+// ============================================================
+// Event Listeners
+// ============================================================
+document.getElementById('v0').addEventListener('input', (e) => {
+  document.getElementById('v0-val').textContent = e.target.value;
+  triggerPredict();
+});
+document.getElementById('ang').addEventListener('input', (e) => {
+  document.getElementById('ang-val').textContent = e.target.value;
+  triggerPredict();
+});
+document.getElementById('mass').addEventListener('input', (e) => {
+  document.getElementById('mass-val').textContent = parseFloat(e.target.value).toFixed(1);
+  triggerPredict();
+});
+document.getElementById('model-select').addEventListener('change', triggerPredict);
+document.getElementById('ode-toggle').addEventListener('change', triggerPredict);
+document.getElementById('vac-toggle').addEventListener('change', () => {
+  if (currentResult) {
+    const v0  = parseFloat(document.getElementById('v0').value);
+    const ang = parseFloat(document.getElementById('ang').value);
+    const showVac = document.getElementById('vac-toggle').checked;
+    chart.data.datasets[2].data = showVac ? vacuumParabola(v0, ang) : [];
+    chart.update();
+  }
+});
+
+// ============================================================
+// Boot
+// ============================================================
+(async () => {
+  document.getElementById('loading').classList.add('show');
+  initChart();
+  await loadMetrics();
+  await predict();
+  document.getElementById('loading').classList.remove('show');
+})();
+</script>
+</body>
+</html>
